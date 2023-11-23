@@ -1,0 +1,72 @@
+name: releases-json
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        required: true
+        type: string
+      artifact_name:
+        required: false
+        type: string
+        default: 'releases-json'
+      filename:
+        required: false
+        type: string
+        default: 'releases.json'
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    outputs:
+      releases: ${{ steps.generate.outputs.releases }}
+    steps:
+      -
+        name: Generate
+        id: generate
+        uses: actions/github-script@v6
+        with:
+          retries: 3
+          script: |
+            const fs = require('fs');
+
+            let res = {};
+            const [owner, repo] = '${{ inputs.repository }}'.split('/');
+            core.info(`Fetching releases for ${owner}/${repo}`);
+
+            const latestRelease = await github.rest.repos.getLatestRelease({
+              owner,
+              repo,
+            });
+            res['latest'] = {
+              id: latestRelease.data.id,
+              tag_name: latestRelease.data.tag_name,
+              html_url: latestRelease.data.html_url,
+              assets: latestRelease.data.assets.map(asset => asset.browser_download_url).sort(),
+            };
+
+            const releases = await github.paginate(github.rest.repos.listReleases.endpoint.merge({
+              owner,
+              repo,
+            }));
+            for (const release of releases) {
+              res[release.tag_name] = {
+                id: release.id,
+                tag_name: release.tag_name,
+                html_url: release.html_url,
+                assets: release.assets.map(asset => asset.browser_download_url).sort(),
+              };
+            }
+
+            await fs.writeFileSync('${{ inputs.filename }}', JSON.stringify(res, null, 2));
+      -
+        name: Check file
+        run: |
+          jq . ${{ inputs.filename }}
+      -
+        name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.filename }}
+          if-no-files-found: error
